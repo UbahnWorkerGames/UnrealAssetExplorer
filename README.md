@@ -58,7 +58,23 @@ The frontend is pre-generated in this repo, so you can start directly with the P
 
 ## Quick Start
 
-### 1) Dev mode (Windows)
+### 1) Production runtime (Windows, direct start)
+
+```bat
+start-prod.bat
+```
+
+You can start directly with this.
+No frontend build step is required for normal use.
+
+### 2) Production runtime (Linux, direct start)
+
+```bash
+chmod +x start-prod.sh
+./start-prod.sh
+```
+
+### 3) Dev mode (Windows)
 
 ```bat
 start-dev.bat
@@ -69,31 +85,13 @@ This starts:
 - Vite dev server for frontend
 - FastAPI backend with auto-reload on `127.0.0.1:8008`
 
-### 2) Build frontend once (Windows)
+### 4) Optional: rebuild frontend bundle (Windows)
 
 ```bat
 build-ui.bat
 ```
 
-Creates `frontend/dist`.
-
-### 3) Production runtime (Windows)
-
-```bat
-start-prod.bat
-```
-
-- creates/uses backend venv
-- installs Python deps
-- serves built UI from `frontend/dist`
-- starts backend on `0.0.0.0:8008`
-
-### 4) Production runtime (Linux)
-
-```bash
-chmod +x start-prod.sh
-./start-prod.sh
-```
+Use this only if you changed frontend source code and want a new `frontend/dist`.
 
 ## UI Delivery Modes
 

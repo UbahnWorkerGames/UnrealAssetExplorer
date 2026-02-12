@@ -4248,7 +4248,16 @@ def _build_snapshot_zip(asset: Dict[str, Any], project: Dict[str, Any], include_
                             prefix = None
                     if prefix is None:
                         prefix = matched_root.name
-                    arc = f"Content/{prefix}/{arc}" if prefix else f"Content/{arc}"
+                    prefix_norm = str(prefix or "").replace("\\", "/").strip("/")
+                    arc_norm = str(arc or "").replace("\\", "/").lstrip("/")
+                    if prefix_norm:
+                        if arc_norm.lower() == prefix_norm.lower():
+                            arc_norm = ""
+                        elif arc_norm.lower().startswith((prefix_norm + "/").lower()):
+                            arc_norm = arc_norm[len(prefix_norm) + 1 :]
+                        arc = f"Content/{prefix_norm}/{arc_norm}" if arc_norm else f"Content/{prefix_norm}"
+                    else:
+                        arc = f"Content/{arc_norm}"
             zf.write(src, arc)
 
     if missing:
