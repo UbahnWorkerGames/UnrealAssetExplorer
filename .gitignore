@@ -7,7 +7,6 @@ venv/
 ENV/
 env/
 build/
-dist/
 *.egg-info/
 .pytest_cache/
 .tox/
@@ -15,7 +14,6 @@ dist/
 # --- React / Node.js ---
 node_modules/
 build/
-dist/
 .env
 .env.local
 .env.development.local
