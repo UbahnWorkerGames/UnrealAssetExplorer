@@ -13,7 +13,9 @@ SQL_LOGGER = logging.getLogger("sql")
 
 def get_db() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    # FastAPI can enter/exit sync yield dependencies on different worker threads.
+    # Allow using the same connection object across those thread boundaries.
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA journal_mode=WAL")
