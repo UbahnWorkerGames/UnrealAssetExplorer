@@ -1,7 +1,14 @@
+const ENV_API_BASE = (import.meta.env.VITE_API_BASE || "").trim();
+const STORED_API_BASE =
+  typeof window !== "undefined"
+    ? String(window.localStorage.getItem("ameb_backend_base_url") || "").trim()
+    : "";
+
 export const API_BASE =
-  import.meta.env.VITE_API_BASE ||
+  STORED_API_BASE ||
+  ENV_API_BASE ||
   (typeof window !== "undefined" && window.location?.origin
-    ? "http://127.0.0.1:8008"
+    ? String(window.location.origin).trim()
     : "http://127.0.0.1:8008");
 
 export async function fetchProjects(params = {}) {

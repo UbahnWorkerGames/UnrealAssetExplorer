@@ -592,6 +592,11 @@ export default function App() {
     if (activeProviderLabel === "OpenAI") return "OpenAI";
     return `AI (${activeProviderLabel})`;
   }, [activeProviderLabel]);
+  const showProjectFilesystemActions = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    const host = String(window.location.hostname || "").toLowerCase();
+    return host === "localhost" || host === "::1" || host.startsWith("127.");
+  }, []);
   function resolveViewFromHash() {
     if (typeof window === "undefined") return null;
     const hash = window.location.hash.replace("#", "").trim();
@@ -639,6 +644,33 @@ export default function App() {
     if (typeof localStorage === "undefined") return;
     localStorage.setItem("ameb_hide_importhelper", showImportHelper ? "0" : "1");
   }, [showImportHelper]);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") return;
+    const host = String(window.location.hostname || "").toLowerCase();
+    const isLocalHost = host === "localhost" || host === "127.0.0.1" || host === "::1";
+    if (isLocalHost) return;
+    if (localStorage.getItem("ameb_backend_prompted") === "1") return;
+
+    const fallbackBase = String(API_BASE || window.location.origin || "").replace(/\/$/, "");
+    const answer = window.prompt("Backend server URL (example: http://192.168.185.109:8008)", fallbackBase);
+    let chosen = String(answer || fallbackBase).trim();
+    if (!chosen) {
+      chosen = fallbackBase;
+    }
+    if (chosen && !/^https?:\/\//i.test(chosen)) {
+      chosen = `http://${chosen}`;
+    }
+    try {
+      const parsed = new URL(chosen);
+      chosen = `${parsed.protocol}//${parsed.host}`;
+    } catch (_err) {
+      chosen = fallbackBase;
+    }
+
+    localStorage.setItem("ameb_backend_base_url", chosen.replace(/\/$/, ""));
+    localStorage.setItem("ameb_backend_prompted", "1");
+    window.location.reload();
+  }, []);
   useEffect(() => {
     if (typeof localStorage === "undefined") return;
     localStorage.setItem("ameb_project_sort_key", projectSortKey);
@@ -3916,23 +3948,29 @@ function formatSizeGb(bytes) {
                                   }} title="Edit project name, source path, and metadata.">
                                     Edit
                                   </button>
-                                  <button className="btn btn-outline-dark btn-sm" onClick={() => handleReimportProject(project)} title="Sync files from source and reimport in Asset Tool.">
-                                    <FontAwesomeIcon icon={faCopy} /> Sync
-                                  </button>
-                                  <button
-                                    className="btn btn-outline-dark btn-sm"
-                                    onClick={() => handleOpenProject(project)}
-                                    title="Open the local project folder."
-                                  >
-                                    <FontAwesomeIcon icon={faFolderOpen} /> Open Project Folder
-                                  </button>
-                                  <button
-                                    className="btn btn-outline-dark btn-sm"
-                                    onClick={() => handleOpenProjectSource(project)}
-                                    title="Open the source project folder."
-                                  >
-                                    <FontAwesomeIcon icon={faFolderOpen} /> Open Source Folder
-                                  </button>
+                                  {showProjectFilesystemActions && (
+                                    <button className="btn btn-outline-dark btn-sm" onClick={() => handleReimportProject(project)} title="Sync files from source and reimport in Asset Tool.">
+                                      <FontAwesomeIcon icon={faCopy} /> Sync
+                                    </button>
+                                  )}
+                                  {showProjectFilesystemActions && (
+                                    <button
+                                      className="btn btn-outline-dark btn-sm"
+                                      onClick={() => handleOpenProject(project)}
+                                      title="Open the local project folder."
+                                    >
+                                      <FontAwesomeIcon icon={faFolderOpen} /> Open Project Folder
+                                    </button>
+                                  )}
+                                  {showProjectFilesystemActions && (
+                                    <button
+                                      className="btn btn-outline-dark btn-sm"
+                                      onClick={() => handleOpenProjectSource(project)}
+                                      title="Open the source project folder."
+                                    >
+                                      <FontAwesomeIcon icon={faFolderOpen} /> Open Source Folder
+                                    </button>
+                                  )}
                                   <button
                                     className="btn btn-outline-dark btn-sm"
                                     onClick={() => handleGenerateSetcard(project.id)}
@@ -3940,9 +3978,11 @@ function formatSizeGb(bytes) {
                                   >
                                     <FontAwesomeIcon icon={faImages} /> Setcard
                                   </button>
-                                  <button className="btn btn-outline-dark btn-sm" onClick={() => handleRunExportCmd(project)} title="Launch UnrealEditor-Cmd to re-export project files, then reimport/sync in Asset Tool.">
-                                    Re-export via UE Cmd
-                                  </button>
+                                  {showProjectFilesystemActions && (
+                                    <button className="btn btn-outline-dark btn-sm" onClick={() => handleRunExportCmd(project)} title="Launch UnrealEditor-Cmd to re-export project files, then reimport/sync in Asset Tool.">
+                                      Re-export via UE Cmd
+                                    </button>
+                                  )}
                                 </div>
                                 <div className="project-action-row-group project-action-row-group-local">
                                   <div className="project-action-row-label">
