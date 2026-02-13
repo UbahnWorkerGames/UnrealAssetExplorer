@@ -5798,11 +5798,21 @@ def project_stats(
             params.append('%"collision_complexity":%')
             params.append('%"collision_complexity": "NoCollision"%')
     if tag:
-        filters.append("a.tags_json LIKE ?")
-        params.append(f"%{tag}%")
+        tag_lc = str(tag).strip().lower()
+        if tag_lc:
+            filters.append(
+                "EXISTS (SELECT 1 FROM json_each(a.tags_json) jt WHERE lower(CAST(jt.value AS TEXT)) LIKE ?)"
+            )
+            params.append(f"%{tag_lc}%")
     if query:
         query_lc = query.lower()
-        filters.append("(lower(a.name) LIKE ? OR lower(a.description) LIKE ? OR lower(a.tags_json) LIKE ?)")
+        filters.append(
+            "("
+            "lower(a.name) LIKE ? "
+            "OR lower(a.description) LIKE ? "
+            "OR EXISTS (SELECT 1 FROM json_each(a.tags_json) jq WHERE lower(CAST(jq.value AS TEXT)) LIKE ?)"
+            ")"
+        )
         like_value = f"%{query_lc}%"
         params.extend([like_value, like_value, like_value])
 
@@ -7628,7 +7638,7 @@ def list_assets(
         display_limit = 0
     filters = []
     params: List[Any] = []
-    use_fts = bool((query and not semantic) or tag)
+    use_fts = bool(query and not semantic)
 
     def _fts_escape(term: str) -> str:
         cleaned = term.replace('"', '""').strip()
@@ -7654,9 +7664,13 @@ def list_assets(
             placeholders = ",".join(["?"] * len(type_list))
             filters.append(f"a.type IN ({placeholders})")
             params.extend(type_list)
-    if tag and not use_fts:
-        filters.append("a.tags_json LIKE ?")
-        params.append(f"%{tag}%")
+    if tag:
+        tag_lc = str(tag).strip().lower()
+        if tag_lc:
+            filters.append(
+                "EXISTS (SELECT 1 FROM json_each(a.tags_json) jt WHERE lower(CAST(jt.value AS TEXT)) LIKE ?)"
+            )
+            params.append(f"%{tag_lc}%")
     if nanite is not None and str(nanite).strip() != "":
         raw = str(nanite).strip().lower()
         if raw in {"1", "true", "yes", "on"}:
@@ -7697,14 +7711,18 @@ def list_assets(
         fts_parts = []
         if query:
             fts_parts.append(_fts_escape(query))
-        if tag:
-            fts_parts.append(f"tags:{_fts_escape(tag)}")
         if fts_parts:
             filters.append("assets_fts MATCH ?")
             params.append(" AND ".join(fts_parts))
     elif query and not semantic:
         query_lc = query.lower()
-        filters.append("(lower(a.name) LIKE ? OR lower(a.description) LIKE ? OR lower(a.tags_json) LIKE ?)")
+        filters.append(
+            "("
+            "lower(a.name) LIKE ? "
+            "OR lower(a.description) LIKE ? "
+            "OR EXISTS (SELECT 1 FROM json_each(a.tags_json) jq WHERE lower(CAST(jq.value AS TEXT)) LIKE ?)"
+            ")"
+        )
         like_value = f"%{query_lc}%"
         params.extend([like_value, like_value, like_value])
 
@@ -7723,7 +7741,47 @@ def list_assets(
             f"SELECT a.*, t.tags_translated_json, p.art_style AS project_art_style, p.project_era {base} {where} {order_by} LIMIT ?",
             params + [max_candidates],
         )
-        query_vec = embed_text(query)
+        try:
+            query_vec = embed_text(query)
+        except Exception as exc:
+            logger.warning("Semantic query embedding failed, falling back to text search: %s", exc)
+            query_vec = []
+        missing_rows: List[Dict[str, Any]] = []
+        missing_texts: List[str] = []
+        for row in rows:
+            raw_emb = row.get("embedding_json") or ""
+            has_embedding = False
+            if raw_emb:
+                try:
+                    parsed = json.loads(raw_emb)
+                    has_embedding = bool(parsed)
+                except Exception:
+                    has_embedding = False
+            if not has_embedding:
+                try:
+                    tags_raw = json.loads(row.get("tags_json") or "[]")
+                except Exception:
+                    tags_raw = []
+                try:
+                    translated_raw = json.loads(row.get("tags_translated_json") or "[]")
+                except Exception:
+                    translated_raw = []
+                missing_rows.append(row)
+                missing_texts.append(
+                    _build_embedding_text(
+                        row.get("name") or "",
+                        row.get("description") or "",
+                        tags_raw if isinstance(tags_raw, list) else [],
+                        translated_raw if isinstance(translated_raw, list) else [],
+                    )
+                )
+        if missing_texts:
+            try:
+                fallback_vectors = embed_texts(missing_texts)
+                for row, vec in zip(missing_rows, fallback_vectors):
+                    row["embedding_json"] = json.dumps(vec)
+            except Exception as exc:
+                logger.warning("Semantic fallback embedding failed for %s row(s): %s", len(missing_texts), exc)
         scored = []
         for row in rows:
             try:
@@ -7734,6 +7792,36 @@ def list_assets(
             if score > 0:
                 scored.append((score, row))
         scored.sort(key=lambda item: item[0], reverse=True)
+        if not scored:
+            query_lc = query.lower()
+            fallback_filters = list(filters)
+            fallback_params = list(params)
+            fallback_filters.append(
+                "("
+                "lower(a.name) LIKE ? "
+                "OR lower(a.description) LIKE ? "
+                "OR EXISTS (SELECT 1 FROM json_each(a.tags_json) jq WHERE lower(CAST(jq.value AS TEXT)) LIKE ?)"
+                ")"
+            )
+            like_value = f"%{query_lc}%"
+            fallback_params.extend([like_value, like_value, like_value])
+            fallback_where = f"WHERE {' AND '.join(fallback_filters)}" if fallback_filters else ""
+            count_row = fetch_one(conn, f"SELECT COUNT(*) AS count {base} {fallback_where}", fallback_params)
+            total = count_row["count"] if count_row else 0
+            offset = (page - 1) * page_size
+            rows = fetch_all(
+                conn,
+                f"SELECT a.*, t.tags_translated_json, p.art_style AS project_art_style, p.project_era {base} {fallback_where} {order_by} LIMIT ? OFFSET ?",
+                fallback_params + [page_size, offset],
+            )
+            conn.close()
+            return {
+                "items": [serialize_asset(row, display_limit) for row in rows],
+                "total": total,
+                "total_all": total_all,
+                "page": page,
+                "page_size": page_size,
+            }
         total = len(scored)
         offset = (page - 1) * page_size
         page_rows = [row for _, row in scored[offset : offset + page_size]]
