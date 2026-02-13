@@ -24,14 +24,16 @@ from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 import logging
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, UploadFile, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response, RedirectResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
 
-from db import DB_PATH, fetch_all, fetch_one, get_db, init_db
+from app_config import get_app_settings
+from db import DB_PATH, fetch_all, fetch_one, get_db, get_db_dep, init_db
 from services.asset_processing import process_asset_zip
 from services.embeddings import cosine_similarity, embed_text, embed_texts
 from services.llm_tags import (
@@ -46,13 +48,14 @@ from services.llm_tags import (
     translate_tags_debug,
 )
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
-ASSETS_DIR = DATA_DIR / "assets"
-PROJECTS_DIR = DATA_DIR / "projects"
-UPLOADS_DIR = DATA_DIR / "uploads"
-BATCH_OUTPUT_DIR = DATA_DIR / "batch_outputs"
-STARTUP_JOBS_DIR = DATA_DIR / "startup_jobs"
+APP_SETTINGS = get_app_settings()
+BASE_DIR = APP_SETTINGS.base_dir
+DATA_DIR = APP_SETTINGS.data_dir
+ASSETS_DIR = APP_SETTINGS.assets_dir
+PROJECTS_DIR = APP_SETTINGS.projects_dir
+UPLOADS_DIR = APP_SETTINGS.uploads_dir
+BATCH_OUTPUT_DIR = APP_SETTINGS.batch_output_dir
+STARTUP_JOBS_DIR = APP_SETTINGS.startup_jobs_dir
 
 app = FastAPI(title="Asset Explorer API")
 logger = logging.getLogger("uvicorn.error")
@@ -2927,7 +2930,7 @@ def _run_batch_translate_names(
                                 total,
                                 done,
                                 errors,
-                                message=f"Translate name-tags: {done}/{total} Ã¢â‚¬Â¢ chunk {chunk_idx}/{chunks_total}",
+                                message=f"Translate name-tags: {done}/{total} • chunk {chunk_idx}/{chunks_total}",
                             )
 
                 missing = len(chunk) - len(seen_ids)
@@ -2944,7 +2947,7 @@ def _run_batch_translate_names(
                                 total,
                                 done,
                                 errors,
-                                message=f"Translate name-tags: {done}/{total} Ã¢â‚¬Â¢ chunk {chunk_idx}/{chunks_total}",
+                                message=f"Translate name-tags: {done}/{total} • chunk {chunk_idx}/{chunks_total}",
                             )
                 if batch_rows:
                     _flush_tag_batch_chunked(batch_rows, settings)
@@ -3711,7 +3714,7 @@ def _run_batch_translate_tags(
                                 total,
                                 done,
                                 errors,
-                                message=f"Translate tags: {done}/{total} Ã¢â‚¬Â¢ chunk {chunk_idx}/{chunks_total}",
+                                message=f"Translate tags: {done}/{total} • chunk {chunk_idx}/{chunks_total}",
                             )
 
                 missing = len(chunk) - len(seen_ids)
@@ -3728,7 +3731,7 @@ def _run_batch_translate_tags(
                                 total,
                                 done,
                                 errors,
-                                message=f"Translate tags: {done}/{total} Ã¢â‚¬Â¢ chunk {chunk_idx}/{chunks_total}",
+                                message=f"Translate tags: {done}/{total} • chunk {chunk_idx}/{chunks_total}",
                             )
                 if batch_rows:
                     _flush_tag_batch_chunked(batch_rows, settings)
@@ -4671,7 +4674,7 @@ def _normalize_tags(tags: List[str]) -> List[str]:
         value = str(tag).strip().lower()
         if not value:
             continue
-        # Drop mojibake / invalid control chars (e.g. "weiÃƒÂ£Ã‚Å¸")
+        # Drop mojibake / invalid control chars (e.g. "weiã")
         if "\ufffd" in value or any(0x80 <= ord(ch) <= 0x9F for ch in value):
             continue
         if value not in cleaned:
@@ -5213,15 +5216,11 @@ def _resolve_ui_dist(settings: Dict[str, str]) -> Optional[Path]:
     env_path = os.getenv("ASSET_UI_DIST") or os.getenv("FRONTEND_DIST")
     if env_path:
         return Path(env_path).expanduser()
-
-    cfg_path = (settings.get("frontend_dist_path") or "").strip()
-    if cfg_path:
-        p = Path(cfg_path).expanduser()
-        if not p.is_absolute():
-            p = (BASE_DIR / p).resolve()
-        return p
-
+    cfg_path = settings.get("frontend_dist_path") or ""
+    if cfg_path.strip():
+        return Path(cfg_path).expanduser()
     return BASE_DIR / "frontend" / "dist"
+
 
 def _open_browser(url: str) -> None:
     try:
@@ -5232,27 +5231,11 @@ def _open_browser(url: str) -> None:
 
 def _configure_frontend(settings: Dict[str, str]) -> None:
     global UI_ENABLED, UI_DIST_DIR
-
-    raw_env = os.getenv("ASSET_UI")
-    if raw_env is None:
-        raw_env = os.getenv("SERVE_FRONTEND")
-    raw_cfg = settings.get("serve_frontend")
-
-    env_set = raw_env is not None and str(raw_env).strip() != ""
-    cfg_set = raw_cfg is not None and str(raw_cfg).strip() != ""
-
+    env_enabled = _bool_from_setting(os.getenv("ASSET_UI") or os.getenv("SERVE_FRONTEND"))
+    cfg_enabled = _bool_from_setting(settings.get("serve_frontend"))
+    enabled = env_enabled or cfg_enabled
     dist_dir = _resolve_ui_dist(settings)
-    dist_exists = bool(dist_dir and dist_dir.is_dir())
-
-    if env_set:
-        enabled = _bool_from_setting(raw_env)
-    elif cfg_set:
-        enabled = _bool_from_setting(raw_cfg)
-    else:
-        # Sensible default for runtime builds: if dist exists, serve it.
-        enabled = dist_exists
-
-    if enabled and dist_exists:
+    if enabled and dist_dir and dist_dir.is_dir():
         UI_ENABLED = True
         UI_DIST_DIR = dist_dir
         app.mount("/ui", StaticFiles(directory=dist_dir, html=True), name="ui")
@@ -5260,14 +5243,7 @@ def _configure_frontend(settings: Dict[str, str]) -> None:
     else:
         UI_ENABLED = False
         UI_DIST_DIR = None
-        logger.info(
-            "UI disabled (enabled=%s dist=%s exists=%s env=%s cfg=%s)",
-            enabled,
-            dist_dir,
-            dist_exists,
-            raw_env,
-            raw_cfg,
-        )
+
 
 @app.on_event("startup")
 def startup() -> None:
@@ -5309,23 +5285,34 @@ def startup() -> None:
     )
     logger.info("Startup: importing archived batch outputs from %s", BATCH_OUTPUT_DIR)
     _run_startup_import_worker(dict(settings))
-    _configure_frontend(settings)
+    if _startup_import_snapshot().get("running"):
+        logger.warning("Startup import still running; frontend stays disabled")
+    else:
+        _configure_frontend(settings)
 
 
 @app.middleware("http")
 async def startup_import_write_lock(request, call_next):
     path = request.url.path or "/"
-    # Keep read/UI endpoints responsive while startup import replays archived batch files.
-    if _startup_import_snapshot().get("running"):
+    # Do not serve UI while startup import replays archived batch files.
+    snapshot = _startup_import_snapshot()
+    if snapshot.get("running"):
+        if path == "/" or path.startswith("/ui"):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Startup batch import in progress",
+                    "startup_import": snapshot,
+                },
+            )
         if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
-            if not path.startswith("/ui"):
-                return JSONResponse(
-                    status_code=503,
-                    content={
-                        "detail": "Startup batch import in progress",
-                        "startup_import": _startup_import_snapshot(),
-                    },
-                )
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Startup batch import in progress",
+                    "startup_import": snapshot,
+                },
+            )
     return await call_next(request)
 
 
@@ -6097,8 +6084,10 @@ def run_project_export_cmd(project_id: int, payload: ProjectExportCmd) -> Dict[s
 
     dest_root = Path(folder_path)
     source_root = Path(project["source_path"]).expanduser() if project.get("source_path") else None
-    project_size = float(project.get("size_bytes") or 0)
-    if project_size < 5 * 1024 * 1024 and source_root and source_root.exists():
+    reimported_once = bool(project.get("reimported_once") or 0)
+    if reimported_once:
+        work_root = dest_root
+    elif source_root and source_root.exists():
         work_root = source_root
     else:
         work_root = dest_root
@@ -6633,11 +6622,11 @@ def cancel_all_tasks() -> Dict[str, Any]:
 
 
 @app.get("/settings")
-def read_settings() -> Dict[str, Any]:
-    conn = get_db()
+def read_settings(conn: sqlite3.Connection = Depends(get_db_dep)) -> Dict[str, Any]:
     settings = get_settings(conn)
-    conn.close()
     masked = {**settings}
+    if "import_base_url" not in masked:
+        masked["import_base_url"] = "http://127.0.0.1:9090"
     if "ue_cmd_path" not in masked:
         masked["ue_cmd_path"] = ""
     if "skip_export_if_on_server" in masked:
@@ -6700,7 +6689,17 @@ def get_last_upload() -> Dict[str, Any]:
 
 
 @app.post("/assets/upload")
-def upload_asset(file: UploadFile = File(...), project_id: Optional[int] = Form(None)) -> Dict[str, Any]:
+async def upload_asset(
+    file: UploadFile = File(...),
+    project_id: Optional[int] = Form(None),
+) -> Dict[str, Any]:
+    return await run_in_threadpool(_upload_asset_sync, file, project_id)
+
+
+def _upload_asset_sync(
+    file: UploadFile,
+    project_id: Optional[int],
+) -> Dict[str, Any]:
     ensure_dirs()
     if not file.filename.lower().endswith(".zip"):
         logger.warning("Upload rejected (not zip): filename=%s project_id=%s", file.filename, project_id)
@@ -6735,33 +6734,34 @@ def upload_asset(file: UploadFile = File(...), project_id: Optional[int] = Form(
     hash_main_sha256 = (meta.get("hash_main_sha256") or "").strip()
 
     conn = get_db()
-    project_row = fetch_one(conn, "SELECT id FROM projects WHERE id = ?", (project_id,)) if project_id is not None else None
-    if project_id is not None and not project_row:
-        logger.warning("Upload project_id %s not found in DB", project_id)
-    if not project_row:
-        resolved_id = _resolve_project_id_from_meta(conn, meta)
-        if resolved_id:
-            project_id = resolved_id
-        else:
-            vendor = str(meta.get("vendor") or "").strip()
-            if vendor:
-                existing_vendor = fetch_one(get_db(), "SELECT id FROM projects WHERE lower(source_folder) = lower(?)", (vendor,))
-                if existing_vendor:
-                    project_id = existing_vendor["id"]
-                else:
-                    logger.warning("Upload resolve failed, auto-creating project for vendor=%s", vendor)
-                    project_id = _create_project_from_root(vendor)
+    try:
+        project_row = fetch_one(conn, "SELECT id FROM projects WHERE id = ?", (project_id,)) if project_id is not None else None
+        if project_id is not None and not project_row:
+            logger.warning("Upload project_id %s not found in DB", project_id)
+        if not project_row:
+            resolved_id = _resolve_project_id_from_meta(conn, meta)
+            if resolved_id:
+                project_id = resolved_id
             else:
-                logger.warning("Upload rejected: project_id missing and could not be resolved (vendor/package=%s)", meta.get("package"))
-                conn.close()
-                raise HTTPException(status_code=400, detail="project_id missing and could not be resolved from meta")
+                vendor = str(meta.get("vendor") or "").strip()
+                if vendor:
+                    existing_vendor = fetch_one(conn, "SELECT id FROM projects WHERE lower(source_folder) = lower(?)", (vendor,))
+                    if existing_vendor:
+                        project_id = existing_vendor["id"]
+                    else:
+                        logger.warning("Upload resolve failed, auto-creating project for vendor=%s", vendor)
+                        project_id = _create_project_from_root(vendor)
+                else:
+                    logger.warning("Upload rejected: project_id missing and could not be resolved (vendor/package=%s)", meta.get("package"))
+                    raise HTTPException(status_code=400, detail="project_id missing and could not be resolved from meta")
 
-    existing = fetch_one(
-        conn,
-        "SELECT id, size_bytes FROM assets WHERE project_id = ? AND hash_full_blake3 = ? LIMIT 1",
-        (project_id, hash_full),
-    )
-    conn.close()
+        existing = fetch_one(
+            conn,
+            "SELECT id, size_bytes FROM assets WHERE project_id = ? AND hash_full_blake3 = ? LIMIT 1",
+            (project_id, hash_full),
+        )
+    finally:
+        conn.close()
     if existing:
         asset_prefix = hash_main[:3]
         asset_dir = ASSETS_DIR / asset_prefix / hash_main
@@ -6782,8 +6782,8 @@ def upload_asset(file: UploadFile = File(...), project_id: Optional[int] = Form(
         if size_bytes <= 0:
             size_bytes = int(existing.get("size_bytes") or 0)
 
-        conn = get_db()
-        cur = conn.cursor()
+        write_conn = get_db()
+        cur = write_conn.cursor()
         cur.execute(
             """
             UPDATE assets
@@ -6803,8 +6803,8 @@ def upload_asset(file: UploadFile = File(...), project_id: Optional[int] = Form(
                 existing["id"],
             ),
         )
-        _db_retry(conn.commit)
-        conn.close()
+        _db_retry(write_conn.commit)
+        write_conn.close()
         logger.info("Upload duplicate: refreshed images project_id=%s hash_full=%s", project_id, hash_full)
         return {"status": "updated_images", "id": existing["id"], "project_id": project_id}
 
@@ -6841,8 +6841,8 @@ def upload_asset(file: UploadFile = File(...), project_id: Optional[int] = Form(
     tags = _normalize_tags(tags)
     size_bytes = int(meta.get("disk_bytes_total") or 0)
 
-    conn = get_db()
-    settings = get_settings(conn)
+    write_conn = get_db()
+    settings = get_settings(write_conn)
     translated_tags = _translate_tags_if_enabled(settings, tags)
     merged_tags = _merge_tags_for_asset(tags, translated_tags)
     embedding = None
@@ -6850,7 +6850,7 @@ def upload_asset(file: UploadFile = File(...), project_id: Optional[int] = Form(
         embedding_text = _build_embedding_text(name, description, tags, translated_tags)
         embedding = embed_text(embedding_text)
 
-    cur = conn.cursor()
+    cur = write_conn.cursor()
     def _insert_asset():
         cur.execute(
             """
@@ -6885,10 +6885,10 @@ def upload_asset(file: UploadFile = File(...), project_id: Optional[int] = Form(
             ),
         )
     _db_retry(_insert_asset)
-    _db_retry(conn.commit)
+    _db_retry(write_conn.commit)
     asset_id = cur.lastrowid
     _db_retry(lambda: _upsert_asset_tags(
-        conn,
+        write_conn,
         asset_id,
         hash_main,
         hash_full,
@@ -6897,8 +6897,8 @@ def upload_asset(file: UploadFile = File(...), project_id: Optional[int] = Form(
         translated_tags,
         settings.get("tag_language") or "",
     ))
-    _db_retry(conn.commit)
-    conn.close()
+    _db_retry(write_conn.commit)
+    write_conn.close()
 
     return {"id": asset_id, "name": name, "project_id": project_id}
 
@@ -8134,6 +8134,4 @@ def generate_project_setcard(project_id: int, force: bool = Query(False)) -> Dic
 def generate_project_previews(project_id: int) -> Dict[str, Any]:
     _queue_preview_generation(project_id)
     return {"status": "queued"}
-
-
 

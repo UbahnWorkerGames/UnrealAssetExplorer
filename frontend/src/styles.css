@@ -875,13 +875,17 @@ body {
 
 .settings-compact-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   align-items: start;
 }
 
 .settings-compact-item {
   min-width: 0;
+}
+
+.settings-row-break {
+  grid-column: 1;
 }
 
 .settings-compact-item .form-check {

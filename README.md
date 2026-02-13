@@ -37,6 +37,7 @@ Important:
 - `frontend/` - React UI source
 - `data/` - runtime data (created/used by backend)
 - `build-ui.bat` - one-time frontend build (Windows)
+- `build-ui.sh` - one-time frontend build (Linux/macOS)
 - `start-dev.bat` - dev mode (Vite + backend reload)
 - `start-prod.bat` - production runtime on Windows (Python-only)
 - `start-prod.sh` - production runtime on Linux (Python-only)
@@ -92,6 +93,13 @@ build-ui.bat
 ```
 
 Use this only if you changed frontend source code and want a new `frontend/dist`.
+
+### 5) Optional: rebuild frontend bundle (Linux/macOS)
+
+```bash
+chmod +x build-ui.sh
+./build-ui.sh
+```
 
 ## UI Delivery Modes
 

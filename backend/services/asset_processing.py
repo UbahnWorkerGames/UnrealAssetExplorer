@@ -19,11 +19,17 @@ FULL_QUALITY = 92
 
 
 def _safe_extract(zip_path: Path, target_dir: Path) -> None:
+    target_root = target_dir.resolve()
     with zipfile.ZipFile(zip_path, "r") as zf:
         for member in zf.infolist():
             member_path = Path(member.filename)
-            if member_path.is_absolute() or ".." in member_path.parts:
+            if member_path.is_absolute():
                 raise ValueError("Zip contains invalid paths")
+            resolved_target = (target_root / member_path).resolve()
+            try:
+                resolved_target.relative_to(target_root)
+            except ValueError as exc:
+                raise ValueError("Zip contains invalid paths") from exc
         zf.extractall(target_dir)
 
 

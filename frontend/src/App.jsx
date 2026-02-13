@@ -1788,9 +1788,10 @@ export default function App() {
     }
   }
   async function handleTagMissingAllProjects() {
-    const totalAssets = Number(projectStatsAggregate?.totalItems || 0);
-    const confirmMessage = totalAssets > 0
-      ? `Tag missing assets for all projects? This will scan about ${totalAssets} assets and may take a while.`
+    const missingAssets = Number(tagStatsAggregate?.assetsWithoutTags || 0);
+    const totalAssets = Number(tagStatsAggregate?.totalAssets || 0);
+    const confirmMessage = missingAssets > 0
+      ? `Tag missing assets for all projects? This targets about ${missingAssets} assets without tags${totalAssets > 0 ? ` (of ${totalAssets} total)` : ""} and may take a while.`
       : "Tag missing assets for all projects? This can take a while.";
     if (!window.confirm(confirmMessage)) return;
     try {
@@ -3870,6 +3871,20 @@ function formatSizeGb(bytes) {
                                   {(projectStats[project.id]?.tagged ?? 0)}/{(projectStats[project.id]?.total ?? 0)}
                                 </span>
                               </div>
+                              <div className="project-meta">
+                                <span className="project-meta-label">Storage</span>
+                                <span className="project-meta-value">
+                                  {project.reimported_once ? (
+                                    <span title="Local: sync has been executed at least once." aria-label="Local">
+                                      <FontAwesomeIcon icon={faHardDrive} /> Local
+                                    </span>
+                                  ) : (
+                                    <span title="External: uses source directory until the first sync." aria-label="External">
+                                      <FontAwesomeIcon icon={faFolderOpen} /> External
+                                    </span>
+                                  )}
+                                </span>
+                              </div>
                               {projectStats[project.id]?.types &&
                                 Object.keys(projectStats[project.id].types || {}).length > 0 && (
                                   <div className="project-tags">
@@ -3903,6 +3918,20 @@ function formatSizeGb(bytes) {
                                   </button>
                                   <button className="btn btn-outline-dark btn-sm" onClick={() => handleReimportProject(project)} title="Sync files from source and reimport in Asset Tool.">
                                     <FontAwesomeIcon icon={faCopy} /> Sync
+                                  </button>
+                                  <button
+                                    className="btn btn-outline-dark btn-sm"
+                                    onClick={() => handleOpenProject(project)}
+                                    title="Open the local project folder."
+                                  >
+                                    <FontAwesomeIcon icon={faFolderOpen} /> Open Project Folder
+                                  </button>
+                                  <button
+                                    className="btn btn-outline-dark btn-sm"
+                                    onClick={() => handleOpenProjectSource(project)}
+                                    title="Open the source project folder."
+                                  >
+                                    <FontAwesomeIcon icon={faFolderOpen} /> Open Source Folder
                                   </button>
                                   <button
                                     className="btn btn-outline-dark btn-sm"
@@ -4349,7 +4378,7 @@ function formatSizeGb(bytes) {
                       </label>
                     </div>
                   </div>
-                  <div className="settings-compact-item">
+                  <div className="settings-compact-item settings-row-break">
                     <div className="form-row">
                       <label className="form-label">Sidebar width (px)</label>
                       <input
@@ -4392,6 +4421,17 @@ function formatSizeGb(bytes) {
                         placeholder="UnrealEditor-Cmd path"
                         value={settings.ue_cmd_path || "I:/epic/UE_5.7/Engine/Binaries/Win64/UnrealEditor-Cmd.exe"}
                         onChange={(e) => setSettings((prev) => ({ ...prev, ue_cmd_path: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                  <div className="settings-compact-item">
+                    <div className="form-row">
+                      <label className="form-label">Listener base URL</label>
+                      <input
+                        className="form-control"
+                        placeholder="http://127.0.0.1:9090"
+                        value={settings.import_base_url || ""}
+                        onChange={(e) => setSettings((prev) => ({ ...prev, import_base_url: e.target.value }))}
                       />
                     </div>
                   </div>

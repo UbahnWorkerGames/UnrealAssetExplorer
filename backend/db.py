@@ -1,10 +1,11 @@
 import sqlite3
 import os
 import logging
-from pathlib import Path
-from typing import Iterable
+from typing import Generator, Iterable
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "app.db"
+from app_config import get_app_settings
+
+DB_PATH = get_app_settings().db_path
 
 SQL_LOGGER = logging.getLogger("sql")
 
@@ -25,6 +26,14 @@ def get_db() -> sqlite3.Connection:
         SQL_LOGGER.setLevel(logging.INFO)
         conn.set_trace_callback(lambda stmt: SQL_LOGGER.info("SQL: %s", stmt))
     return conn
+
+
+def get_db_dep() -> Generator[sqlite3.Connection, None, None]:
+    conn = get_db()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
